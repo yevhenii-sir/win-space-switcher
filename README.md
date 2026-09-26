@@ -9,6 +9,11 @@ A tiny, fast replacement for the Windows **Win+Space** keyboard layout switcher.
 - Works in **elevated windows** (Task Manager, admin terminals) when started with Windows.
 - One portable ~650 KB executable, ~6 MB of memory, no installer, no runtime to install.
 
+<p align="center">
+  <img src="docs/panel.png" alt="Win+Space: required layouts, optional ones dimmed">
+  <img src="docs/panel-all.png" alt="Win+Alt+Space: all layouts">
+</p>
+
 ## Requirements
 
 Windows 10 version 1703 or later, or Windows 11 (x64).
