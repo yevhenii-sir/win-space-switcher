@@ -51,6 +51,11 @@ impl SwitchService {
         ChannelCommandSink(self.sender.clone().expect("service is running"))
     }
 
+    /// Ends the current switch session, as a Win release would.
+    pub fn end_session(&self) {
+        self.commands().end_session();
+    }
+
     pub fn set_optional_layouts(&self, layouts: HashSet<isize>) {
         *self.optional.lock().unwrap_or_else(PoisonError::into_inner) = layouts;
     }

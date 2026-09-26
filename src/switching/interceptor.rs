@@ -6,11 +6,13 @@ use crate::input::{KeyEvent, Keyboard, KeyboardInterceptor, Vk};
 /// Win itself is never swallowed, only Space. Because the shell then sees Win pressed "alone", it would open
 /// the Start menu on release; so, like AutoHotkey (hook.cpp, sDisguiseNextMenu / KeyEventMenuMask), an
 /// unassigned key is tapped right before the release reaches the system, making Win look used in a combination.
+///
+/// Key state is read from the keyboard rather than tracked from events: a release can be missed (lock screen,
+/// secure desktop, a hook timeout), and remembered state would then stay wrong for good. Inside the hook the
+/// keyboard still reports the state from before the event being processed.
 pub struct LayoutHotkeyInterceptor<K: Keyboard, S: CommandSink> {
     keyboard: K,
     commands: S,
-    left_win_down: bool,
-    right_win_down: bool,
     win_needs_mask: bool,
     space_swallowed: bool,
 }
@@ -20,30 +22,23 @@ impl<K: Keyboard, S: CommandSink> LayoutHotkeyInterceptor<K, S> {
         Self {
             keyboard,
             commands,
-            left_win_down: false,
-            right_win_down: false,
             win_needs_mask: false,
             space_swallowed: false,
         }
     }
 
     fn is_win_held(&self) -> bool {
-        self.left_win_down || self.right_win_down
+        self.keyboard.is_down(Vk::LEFT_WIN) || self.keyboard.is_down(Vk::RIGHT_WIN)
     }
 
     fn on_win(&mut self, event: KeyEvent) -> bool {
-        let was_held = self.is_win_held();
-        if event.key == Vk::LEFT_WIN {
-            self.left_win_down = !event.is_up;
-        } else {
-            self.right_win_down = !event.is_up;
-        }
-
+        let other = if event.key == Vk::LEFT_WIN { Vk::RIGHT_WIN } else { Vk::LEFT_WIN };
         if !event.is_up {
-            if !was_held {
+            // A fresh press, not autorepeat: forget a mask left over from a hold whose release was missed.
+            if !self.is_win_held() {
                 self.win_needs_mask = false;
             }
-        } else if self.win_needs_mask && !self.is_win_held() {
+        } else if self.win_needs_mask && !self.keyboard.is_down(other) {
             self.win_needs_mask = false;
             self.keyboard.tap(Vk::UNASSIGNED);
             self.commands.end_session();
@@ -55,14 +50,14 @@ impl<K: Keyboard, S: CommandSink> LayoutHotkeyInterceptor<K, S> {
         if event.is_up {
             return std::mem::take(&mut self.space_swallowed);
         }
-        if self.space_swallowed {
+        // Autorepeat of a swallowed press; after a missed release Space is up and this is a fresh press.
+        if self.space_swallowed && self.keyboard.is_down(Vk::SPACE) {
             return true;
         }
+        self.space_swallowed = false;
 
-        // Physical state instead of is_win_held(): a Win release can be missed (e.g. while the lock screen is up).
         // Ctrl is excluded because Win+Ctrl+Space is a system shortcut and AltGr arrives as LeftCtrl+RightAlt.
-        let win_down = self.keyboard.is_down(Vk::LEFT_WIN) || self.keyboard.is_down(Vk::RIGHT_WIN);
-        if !win_down || self.keyboard.is_down(Vk::CONTROL) {
+        if !self.is_win_held() || self.keyboard.is_down(Vk::CONTROL) {
             return false;
         }
 
@@ -155,15 +150,22 @@ mod tests {
             Self { interceptor: LayoutHotkeyInterceptor::new(fake.clone(), fake.clone()), fake }
         }
 
+        /// Like the real hook, the interceptor sees the keyboard state from before the event.
         fn press(&mut self, key: Vk) -> bool {
+            let swallowed = self.interceptor.intercept(KeyEvent { key, is_up: false });
             self.fake.0.borrow_mut().down.insert(key);
-            self.interceptor.intercept(KeyEvent { key, is_up: false })
+            swallowed
         }
 
         fn release(&mut self, key: Vk) -> bool {
             let swallowed = self.interceptor.intercept(KeyEvent { key, is_up: true });
             self.fake.0.borrow_mut().down.remove(&key);
             swallowed
+        }
+
+        /// A release the hook never sees, e.g. while the lock screen is up.
+        fn lose_release(&mut self, key: Vk) {
+            self.fake.0.borrow_mut().down.remove(&key);
         }
 
         fn taps(&self) -> Vec<Vk> {
@@ -193,6 +195,48 @@ mod tests {
         assert!(!h.release(Vk::LEFT_WIN));
         assert_eq!(h.taps(), [Vk::UNASSIGNED]);
         assert_eq!(h.commands().last().map(String::as_str), Some("end"));
+    }
+
+    #[test]
+    fn missed_win_release_does_not_mask_the_next_plain_win_tap() {
+        let mut h = Harness::new();
+        h.press(Vk::LEFT_WIN);
+        h.press(Vk::SPACE);
+        h.release(Vk::SPACE);
+        h.lose_release(Vk::LEFT_WIN);
+
+        h.press(Vk::LEFT_WIN);
+        h.release(Vk::LEFT_WIN);
+        assert!(h.taps().is_empty());
+    }
+
+    #[test]
+    fn missed_win_release_on_one_side_does_not_block_the_other() {
+        let mut h = Harness::new();
+        h.press(Vk::RIGHT_WIN);
+        h.lose_release(Vk::RIGHT_WIN);
+
+        h.press(Vk::LEFT_WIN);
+        h.press(Vk::SPACE);
+        h.release(Vk::SPACE);
+        h.release(Vk::LEFT_WIN);
+        assert_eq!(h.taps(), [Vk::UNASSIGNED]);
+        assert_eq!(h.commands().last().map(String::as_str), Some("end"));
+    }
+
+    #[test]
+    fn missed_space_release_does_not_swallow_the_next_space() {
+        let mut h = Harness::new();
+        h.press(Vk::LEFT_WIN);
+        h.press(Vk::SPACE);
+        h.lose_release(Vk::SPACE);
+        h.release(Vk::LEFT_WIN);
+
+        assert!(!h.press(Vk::SPACE));
+        h.release(Vk::SPACE);
+        h.press(Vk::LEFT_WIN);
+        assert!(h.press(Vk::SPACE));
+        assert_eq!(h.commands().iter().filter(|c| c.starts_with("cycle")).count(), 2);
     }
 
     #[test]

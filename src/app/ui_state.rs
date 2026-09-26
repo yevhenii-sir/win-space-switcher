@@ -6,10 +6,10 @@ use windows::core::Result;
 
 use super::{
     FRAME_INTERVAL_MS, FRAME_TIMER, HOOK_REARM_INTERVAL_MS, HOOK_REARM_TIMER, LAYOUT_POLL_INTERVAL_MS,
-    LAYOUT_POLL_TIMER, OVERLAY_DELAY_TIMER, WM_TRAY,
+    LAYOUT_POLL_TIMER, OVERLAY_DELAY_TIMER, WIN_WATCH_INTERVAL_MS, WIN_WATCH_TIMER, WM_TRAY,
 };
 use crate::autostart::Autostart;
-use crate::input::HookHandle;
+use crate::input::{HookHandle, Keyboard, Vk, Win32Keyboard};
 use crate::layouts::{LayoutInfo, LayoutSystem, Win32LayoutSystem};
 use crate::settings::SettingsManager;
 use crate::switching::{SwitchMode, SwitchService};
@@ -96,6 +96,7 @@ impl Ui {
 
     pub(super) fn on_layout_selected(&mut self, layout: isize, mode: SwitchMode) {
         self.session_active = true;
+        unsafe { SetTimer(Some(self.window), WIN_WATCH_TIMER, WIN_WATCH_INTERVAL_MS, None) };
         self.tray_layout = Some(layout);
         self.refresh_tray();
 
@@ -118,11 +119,19 @@ impl Ui {
 
     pub(super) fn on_session_ended(&mut self) {
         self.session_active = false;
+        let _ = unsafe { KillTimer(Some(self.window), WIN_WATCH_TIMER) };
         if self.pending_overlay.take().is_some() {
             let _ = unsafe { KillTimer(Some(self.window), OVERLAY_DELAY_TIMER) };
         }
         self.overlay.hide(milliseconds(self.settings.current().fade_out_ms));
         self.run_frame_timer();
+    }
+
+    /// Ends a session whose Win release never reached the hook.
+    pub(super) fn on_win_watch(&mut self) {
+        if !Win32Keyboard.is_down(Vk::LEFT_WIN) && !Win32Keyboard.is_down(Vk::RIGHT_WIN) {
+            self.service.end_session();
+        }
     }
 
     pub(super) fn on_frame(&mut self) {

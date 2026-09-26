@@ -51,8 +51,12 @@ const OVERLAY_DELAY_TIMER: usize = 1;
 const FRAME_TIMER: usize = 2;
 const LAYOUT_POLL_TIMER: usize = 3;
 const HOOK_REARM_TIMER: usize = 4;
+const WIN_WATCH_TIMER: usize = 5;
 /// Safety net for hooks dropped silently at moments without a notification.
 const HOOK_REARM_INTERVAL_MS: u32 = 10 * 60 * 1000;
+/// Safety net for a Win release the hook never saw (lock screen, secure desktop, a hook timeout), which would
+/// otherwise leave the panel on screen until the next switch.
+const WIN_WATCH_INTERVAL_MS: u32 = 100;
 /// USER_TIMER_MINIMUM; the effective rate is bounded by the system timer (~16 ms), plenty for fades and
 /// following the cursor. Runs only while the overlay needs it.
 const FRAME_INTERVAL_MS: u32 = 10;
@@ -248,6 +252,7 @@ unsafe extern "system" fn main_window_proc(window: HWND, message: u32, wparam: W
             FRAME_TIMER => with_ui(Ui::on_frame).unwrap_or_default(),
             LAYOUT_POLL_TIMER => with_ui(Ui::on_layout_poll).unwrap_or_default(),
             HOOK_REARM_TIMER => with_ui(Ui::rearm_hook).unwrap_or_default(),
+            WIN_WATCH_TIMER => with_ui(Ui::on_win_watch).unwrap_or_default(),
             _ => {}
         },
         // Moments when Windows is most likely to have dropped the hook.
