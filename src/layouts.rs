@@ -2,6 +2,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Globalization::{
     GetLocaleInfoEx, LCIDToLocaleName, LOCALE_ALLOW_NEUTRAL_NAMES, LOCALE_SISO639LANGNAME, LOCALE_SNATIVEDISPLAYNAME,
 };
+use windows::Win32::UI::Input::Ime::ImmGetDefaultIMEWnd;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, GetKeyboardLayoutList, HKL};
 use windows::Win32::UI::WindowsAndMessaging::{
     GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW,
@@ -32,7 +33,7 @@ impl LayoutSystem for Win32LayoutSystem {
     }
 
     fn active(&self) -> isize {
-        input_window().map_or(0, |window| unsafe { GetKeyboardLayout(GetWindowThreadProcessId(window, None)) }.0 as isize)
+        input_window().map_or(0, |window| unsafe { GetKeyboardLayout(window_thread(window)) }.0 as isize)
     }
 
     fn activate(&self, layout: isize) {
@@ -49,9 +50,17 @@ fn input_window() -> Option<HWND> {
     }
 
     let mut info = GUITHREADINFO { cbSize: size_of::<GUITHREADINFO>() as u32, ..Default::default() };
-    let thread_id = unsafe { GetWindowThreadProcessId(foreground, None) };
+    let thread_id = window_thread(foreground);
     let has_focus = unsafe { GetGUIThreadInfo(thread_id, &mut info) }.is_ok() && !info.hwndFocus.is_invalid();
     Some(if has_focus { info.hwndFocus } else { foreground })
+}
+
+/// UI thread that owns `window`. Console windows report a thread of their client process (cmd.exe, …)
+/// rather than conhost's UI thread, and that thread has no keyboard layout or GUI state; the window's
+/// default IME window is not remapped this way and always belongs to the real UI thread.
+fn window_thread(window: HWND) -> u32 {
+    let ime = unsafe { ImmGetDefaultIMEWnd(window) };
+    unsafe { GetWindowThreadProcessId(if ime.is_invalid() { window } else { ime }, None) }
 }
 
 #[derive(Clone, Debug)]

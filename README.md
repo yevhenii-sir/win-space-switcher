@@ -151,8 +151,6 @@ Only one instance runs at a time; starting it again while it is running does not
 
 ## Known limitations
 
-- The classic console window (conhost) ignores programmatic layout requests, so switching there may not work,
-  and the tray icon may show a stale layout while it is focused.
 - The executable is unsigned (see SmartScreen note above).
 
 ## How it works
